@@ -17,6 +17,7 @@
 /*** defines ***/
 /// It sets the upper 3 bits of the character to 0, like the Ctrl key.
 #define CTRL_KEY(k) ((k)&0x1f)
+#define TAB_STOP 4
 
 enum editorKey {
   ARROW_LEFT = 1000,
@@ -30,6 +31,20 @@ enum editorKey {
 };
 
 /*** data ***/
+
+typedef struct row {
+  appendBuffer chars;
+  appendBuffer render;
+} row;
+
+row new_row() {
+  row r = {0};
+  r.chars = new_appendBuffer();
+  r.render = new_appendBuffer();
+
+  return r;
+}
+
 struct editorConfig {
   struct termios orig_termios;
 
@@ -43,7 +58,7 @@ struct editorConfig {
 
   // File contents, line by line
   int_fast32_t num_rows;
-  appendBuffer *rows;
+  row *rows;
 
   // Current view posiiton
   int_fast32_t row_offset;
@@ -204,12 +219,41 @@ void getWindowSize() {
 }
 
 /*** row operations ***/
+
+/// Copies Chars into Renders and replaces tabs for spaces
+void editorUpdateRow(row *r) {
+  size_t tabs = 0;
+
+  for (size_t j = 0; j < r->chars.len; j++)
+    if (r->chars.buf[j] == '\t')
+      tabs++;
+
+  // More memory for the spaces.
+  abResize(&r->render, r->chars.len + tabs * (TAB_STOP - 1) + 1);
+
+  // Replace tabs for 8 spaces.
+  size_t idx = 0;
+
+  for (size_t j = 0; j < r->chars.len; j++) {
+    if (r->chars.buf[j] == '\t') {
+      for (int_fast8_t i = 0; i < TAB_STOP; i++)
+        r->render.buf[idx++] = ' ';
+    } else {
+      r->render.buf[idx++] = r->chars.buf[j];
+    }
+  }
+
+  r->render.buf[idx] = '\0';
+  r->render.len = idx;
+}
+
 void appendRow(char *s) {
   // TODO efficient resize
-  E.rows = realloc(E.rows, sizeof(appendBuffer) * (E.num_rows + 1));
-  E.rows[E.num_rows] = new_appendBuffer();
+  E.rows = realloc(E.rows, sizeof(*E.rows) * (E.num_rows + 1));
+  E.rows[E.num_rows] = new_row();
 
-  abAppend(&E.rows[E.num_rows], s);
+  abAppend(&E.rows[E.num_rows].chars, s);
+  editorUpdateRow(&E.rows[E.num_rows]);
 
   E.num_rows++;
 }
@@ -243,7 +287,7 @@ void editorOpen(char *filename) {
 
 /*** input ***/
 void moveCursor(uint64_t key) {
-  appendBuffer *row = (E.cy >= E.num_rows) ? NULL : &E.rows[E.cy];
+  appendBuffer *row = (E.cy >= E.num_rows) ? NULL : &E.rows[E.cy].chars;
 
   switch (key) {
   case ARROW_DOWN:
@@ -267,7 +311,7 @@ void moveCursor(uint64_t key) {
 
   // If you change to a shorter line, the cursor column position should move
   // too.
-  row = (E.cy >= E.num_rows) ? NULL : &E.rows[E.cy];
+  row = (E.cy >= E.num_rows) ? NULL : &E.rows[E.cy].chars;
   int_fast32_t rowlen = row ? row->len : 0;
   if (E.cx > rowlen) {
     E.cx = rowlen;
@@ -329,7 +373,7 @@ void drawRows(appendBuffer *ab) {
     abAppend(ab, "~");
 
     if (file_row < E.num_rows) {
-      int_fast32_t len = E.rows[file_row].len - E.col_offset;
+      int_fast32_t len = E.rows[file_row].render.len - E.col_offset;
 
       if (len < 0)
         len = 0;
@@ -337,13 +381,13 @@ void drawRows(appendBuffer *ab) {
       if (E.screen_cols < len)
         len = E.screen_cols - 1;
 
-      char place_holder = E.rows[file_row].buf[len + E.col_offset];
-      E.rows[file_row].buf[len + E.col_offset] = '\0';
+      char place_holder = E.rows[file_row].render.buf[len + E.col_offset];
+      E.rows[file_row].render.buf[len + E.col_offset] = '\0';
 
-      abAppend(ab, &E.rows[file_row].buf[E.col_offset]);
+      abAppend(ab, &E.rows[file_row].render.buf[E.col_offset]);
 
       // Resotre the original line
-      E.rows[file_row].buf[len + E.col_offset] = place_holder;
+      E.rows[file_row].render.buf[len + E.col_offset] = place_holder;
     }
 
     abAppend(ab, "\x1b[K"); // Erases part of the current line.
