@@ -1,21 +1,19 @@
 #define _GNU_SOURCE
 
 #include "appendBuffer.c"
-#include <ctype.h>
 #include <errno.h>
-#include <math.h>
+#include <stdarg.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 /*** defines ***/
 /// It sets the upper 3 bits of the character to 0, like the Ctrl key.
 #define CTRL_KEY(k) ((k)&0x1f)
 #define TAB_STOP 4
+#define STATUS_MSG_TIMEOUT 5
 
 enum editorKey {
   ARROW_LEFT = 1000,
@@ -67,6 +65,8 @@ struct editorConfig {
 
   // Status bar stuff
   char *filename;
+  appendBuffer status_msg;
+  time_t status_msg_time;
 };
 
 struct editorConfig E = {0};
@@ -453,8 +453,25 @@ void drawStatusBar(appendBuffer *ab) {
     abAppend(ab, " ");
     len++;
   }
-  abAppend(ab, rstatus);  // Ruler: line and column position of the cursor.
-  abAppend(ab, "\x1b[m"); // Revert inverted colors.
+  abAppend(ab, rstatus);      // Ruler: line and column position of the cursor.
+  abAppend(ab, "\x1b[m\r\n"); // Revert inverted colors and move to new line.
+}
+
+void drawMessageBar(appendBuffer *ab) {
+  abAppend(ab, "\x1b[K"); // Clear message bar.
+
+  // No message to display or the message timed out.
+  if (E.status_msg.len == 0 ||
+      (time(NULL) - E.status_msg_time) > STATUS_MSG_TIMEOUT) {
+    return;
+  }
+
+  if (E.status_msg.len > (size_t)E.screen_cols) {
+    E.status_msg.buf[E.screen_cols] = '\0';
+    E.status_msg.len = E.screen_cols;
+  }
+
+  abAppend(ab, E.status_msg.buf);
 }
 
 void editorRefreshScreen() {
@@ -468,6 +485,7 @@ void editorRefreshScreen() {
 
   drawRows(&ab);
   drawStatusBar(&ab);
+  drawMessageBar(&ab);
 
   // Put cursor at his position.
   char buf[16] = {0};
@@ -480,14 +498,26 @@ void editorRefreshScreen() {
   abFree(&ab);
 }
 
+void setStatusMessage(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+
+  abResize(&E.status_msg, 256);
+  E.status_msg.len = vsnprintf(E.status_msg.buf, E.status_msg.cap, fmt, ap);
+
+  va_end(ap);
+
+  E.status_msg_time = time(NULL);
+}
+
 /*** init ***/
 
 void initEditor() {
   getWindowSize();
   enableRawMode();
 
-  // Leave one line for the status bar.
-  E.screen_rows -= 1;
+  // Leave space for the status bar and message bar.
+  E.screen_rows -= 2;
 }
 
 int main(int argc, char *argv[]) {
@@ -496,6 +526,7 @@ int main(int argc, char *argv[]) {
   if (argc >= 2) {
     editorOpen(argv[1]);
   }
+  setStatusMessage("HELP: Ctrl-C = quit");
 
   while (1) {
     editorRefreshScreen();
