@@ -56,6 +56,9 @@ struct editorConfig {
   int_fast32_t cx;
   int_fast32_t cy;
 
+  // Cursor Render Position
+  int_fast32_t rx;
+
   // File contents, line by line
   int_fast32_t num_rows;
   row *rows;
@@ -220,6 +223,20 @@ void getWindowSize() {
 
 /*** row operations ***/
 
+/// Translates the pointer position from actual to render.
+int_fast32_t editorRowCxToRx(row *row, int_fast32_t cx) {
+  int_fast32_t rx = 0;
+
+  for (int_fast32_t j = 0; j < cx; j++) {
+    if (row->chars.buf[j] == '\t')
+      rx += TAB_STOP - (rx % TAB_STOP);
+
+    rx++;
+  }
+
+  return rx;
+}
+
 /// Copies Chars into Renders and replaces tabs for spaces
 void editorUpdateRow(row *r) {
   size_t tabs = 0;
@@ -352,6 +369,11 @@ void processKeypress() {
 /*** output ***/
 
 void editorScroll() {
+  E.rx = 0;
+  if (E.cy < E.num_rows) {
+    E.rx = editorRowCxToRx(&E.rows[E.cy], E.cx);
+  }
+
   if (E.cy < E.row_offset) {
     E.row_offset = E.cy;
   }
@@ -359,11 +381,11 @@ void editorScroll() {
     E.row_offset = E.cy - E.screen_rows + 1;
   }
 
-  if (E.cx < E.col_offset) {
-    E.col_offset = E.cx;
+  if (E.rx < E.col_offset) {
+    E.col_offset = E.rx;
   }
-  if (E.cx >= E.col_offset + E.screen_cols) {
-    E.col_offset = E.cx - E.screen_cols + 1;
+  if (E.rx >= E.col_offset + E.screen_cols) {
+    E.col_offset = E.rx - E.screen_cols + 1;
   }
 }
 
@@ -413,7 +435,7 @@ void editorRefreshScreen() {
   // Put cursor at his position.
   char buf[16] = {0};
   snprintf(buf, sizeof(buf), "\x1b[%lu;%luH", (E.cy - E.row_offset) + 1,
-           (E.cx - E.col_offset) + 1);
+           (E.rx - E.col_offset) + 1);
   abAppend(&ab, buf);
 
   abAppend(&ab, "\x1b[?25h"); // Show cursor
