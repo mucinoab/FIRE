@@ -1,5 +1,3 @@
-#define _DEFAULT_SOURCE
-#define _BSD_SOURCE
 #define _GNU_SOURCE
 
 #include "appendBuffer.c"
@@ -66,9 +64,15 @@ struct editorConfig {
   // Current view posiiton
   int_fast32_t row_offset;
   int_fast32_t col_offset;
+
+  // Status bar stuff
+  char *filename;
 };
 
 struct editorConfig E = {0};
+
+int_fast32_t getCy() { return (E.cy - E.row_offset); }
+int_fast32_t getCx() { return (E.rx - E.col_offset); }
 
 /*** terminal ***/
 void die(const char *s) {
@@ -282,13 +286,12 @@ void editorOpen(char *filename) {
   if (!fp)
     die("fopen");
 
+  E.filename = strdup(filename);
   char *line = NULL;
   size_t linecap = 0;
   ssize_t linelen = -1;
-  size_t n = 0;
 
   while ((linelen = getline(&line, &linecap, fp)) != -1) {
-    n += 1;
 
     while (linelen > 0 &&
            (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
@@ -394,6 +397,11 @@ void drawRows(appendBuffer *ab) {
     int_fast32_t file_row = y + E.row_offset;
     abAppend(ab, "~");
 
+    if (y == getCy()) {
+      // Underline current row.
+      abAppend(ab, "\x1b[4m");
+    }
+
     if (file_row < E.num_rows) {
       int_fast32_t len = E.rows[file_row].render.len - E.col_offset;
 
@@ -412,13 +420,41 @@ void drawRows(appendBuffer *ab) {
       E.rows[file_row].render.buf[len + E.col_offset] = place_holder;
     }
 
-    abAppend(ab, "\x1b[K"); // Erases part of the current line.
+    if (y == getCy()) {
+      // Unset underline for current row.
+      abAppend(ab, "\x1b[m");
+    }
 
-    if (y != (E.screen_rows - 1))
-      abAppend(ab, "\r\n"); // Avoid new line at last line
+    // Erases part of the current line and jumps to new line.
+    abAppend(ab, "\x1b[K\r\n");
   }
 
   write(STDOUT_FILENO, ab->buf, ab->len);
+}
+
+void drawStatusBar(appendBuffer *ab) {
+  // TODO Handle narrow terminals.
+  char status[128] = {0};
+  char rstatus[16] = {0};
+
+  size_t len = snprintf(status, sizeof(status), "> \"%.20s\" - %ldL",
+                        E.filename ? E.filename : "[No Name]", E.num_rows);
+
+  size_t rlen =
+      snprintf(rstatus, sizeof(rstatus), "%ld,%ld", E.cy + 1, E.cx + 1);
+
+  if (len > (size_t)E.screen_cols) {
+    len = E.screen_cols;
+  }
+
+  abAppend(ab, "\x1b[7m");              // Invert colors.
+  abAppend(ab, status);                 // Filename and number of lines.
+  while (E.screen_cols - len != rlen) { // Fill with white space.
+    abAppend(ab, " ");
+    len++;
+  }
+  abAppend(ab, rstatus);  // Ruler: line and column position of the cursor.
+  abAppend(ab, "\x1b[m"); // Revert inverted colors.
 }
 
 void editorRefreshScreen() {
@@ -431,11 +467,11 @@ void editorRefreshScreen() {
   abAppend(&ab, "\x1b[H");    // Put cursor at the top left.
 
   drawRows(&ab);
+  drawStatusBar(&ab);
 
   // Put cursor at his position.
   char buf[16] = {0};
-  snprintf(buf, sizeof(buf), "\x1b[%lu;%luH", (E.cy - E.row_offset) + 1,
-           (E.rx - E.col_offset) + 1);
+  snprintf(buf, sizeof(buf), "\x1b[%lu;%luH", getCy() + 1, getCx() + 2);
   abAppend(&ab, buf);
 
   abAppend(&ab, "\x1b[?25h"); // Show cursor
@@ -449,6 +485,9 @@ void editorRefreshScreen() {
 void initEditor() {
   getWindowSize();
   enableRawMode();
+
+  // Leave one line for the status bar.
+  E.screen_rows -= 1;
 }
 
 int main(int argc, char *argv[]) {
