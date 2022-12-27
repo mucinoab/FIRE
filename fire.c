@@ -244,10 +244,10 @@ void getWindowSize() {
 /*** row operations ***/
 
 /// Translates the pointer position from actual to render.
-int_fast32_t editorRowCxToRx(row *row, int_fast32_t cx) {
-  int_fast32_t rx = 0;
+uint_fast32_t editorRowCxToRx(row *row, uint_fast32_t cx) {
+  uint_fast32_t rx = 0;
 
-  for (int_fast32_t j = 0; j < cx; j++) {
+  for (uint_fast32_t j = 0; j < cx; j++) {
     if (row->chars.buf[j] == '\t')
       rx += TAB_STOP - (rx % TAB_STOP);
 
@@ -255,6 +255,22 @@ int_fast32_t editorRowCxToRx(row *row, int_fast32_t cx) {
   }
 
   return rx;
+}
+
+uint_fast32_t editorRowRxToCx(row *row, uint_fast32_t rx) {
+  uint_fast32_t cur_rx = 0;
+  uint_fast32_t cx = 0;
+
+  for (cx = 0; cx < row->chars.len; cx++) {
+    if (row->chars.buf[cx] == '\t')
+      cur_rx += (TAB_STOP - 1) - (cur_rx % TAB_STOP);
+    cur_rx++;
+
+    if (cur_rx > rx)
+      return cx;
+  }
+
+  return cx;
 }
 
 /// Copies Chars into Renders and replaces tabs for spaces
@@ -460,6 +476,35 @@ void editorSave() {
   abFree(&file_content);
 }
 
+/*** find ***/
+
+/// Prompt the user for a string and moves the cursor to
+void editorFind() {
+  char *query = editorPrompt("Search: %s (ESC to cancel)");
+  char *match = NULL;
+
+  if (query == NULL)
+    return;
+
+  for (uint_fast32_t i = 0; i < E.num_rows; i++) {
+    row *row = &E.rows[i];
+    match = strstr(row->render.buf, query);
+
+    if (match) {
+      E.cy = i;
+      E.cx = editorRowRxToCx(row, match - row->render.buf);
+      E.row_offset = E.num_rows;
+
+      break;
+    }
+  }
+
+  if (match == NULL)
+    setStatusMessage("Pattern not found"); // TODO show the query used.
+
+  free(query);
+}
+
 /*** input ***/
 
 char *editorPrompt(char *prompt) {
@@ -585,6 +630,10 @@ void processKeypress() {
 
   case CTRL_KEY('l'):
   case '\x1b':
+    break;
+
+  case '/':
+    editorFind();
     break;
 
   default:
@@ -754,7 +803,7 @@ int main(int argc, char *argv[]) {
   if (argc >= 2) {
     editorOpen(argv[1]);
   }
-  setStatusMessage("HELP: Ctrl-S = save | Ctrl-C = quit");
+  setStatusMessage("HELP: Ctrl-S = save | Ctrl-C = quit | / = search");
 
   while (1) {
     editorRefreshScreen();
