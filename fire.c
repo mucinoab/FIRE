@@ -479,16 +479,43 @@ void editorSave() {
 /*** find ***/
 
 void editorFindCallback(char *query, size_t key) {
-  if (key == '\r' || key == '\x1b') {
+  static ssize_t last_match = -1;
+  static ssize_t direction = 1;
+
+  if (key == ENTER || key == ESC) {
+    last_match = -1;
+    direction = 1;
     return;
+  } else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
+    // Next match. TODO make 'n'
+    direction = 1;
+  } else if (key == ARROW_LEFT || key == ARROW_UP) {
+    // Previous match. TODO make 'p'
+    direction = -1;
+  } else {
+    last_match = -1;
+    direction = 1;
   }
 
+  if (last_match == -1)
+    direction = 1;
+
+  ssize_t current = last_match;
+
   for (uint_fast32_t i = 0; i < E.num_rows; i++) {
-    row *row = &E.rows[i];
+    current += direction;
+
+    if (current == -1)
+      current = E.num_rows - 1;
+    else if (current == (ssize_t)E.num_rows)
+      current = 0;
+
+    row *row = &E.rows[current];
     char *match = strstr(row->render.buf, query);
 
     if (match) {
-      E.cy = i;
+      last_match = current;
+      E.cy = current;
       E.cx = editorRowRxToCx(row, match - row->render.buf);
       E.row_offset = E.num_rows;
       break;
@@ -501,10 +528,23 @@ void editorFindCallback(char *query, size_t key) {
 void editorFind() {
   // TODO incremental search, highlight all the matches and add ability to loop
   // through them.
-  char *query = editorPrompt("Search: %s (ESC to cancel)", editorFindCallback);
+  uint_fast32_t saved_cx = E.cx;
+  uint_fast32_t saved_cy = E.cy;
+  uint_fast32_t saved_rowoff = E.row_offset;
+  uint_fast32_t saved_coloff = E.col_offset;
 
-  if (query)
+  char *query =
+      editorPrompt("Search: %s (Use ESC/Arrows/Enter)", editorFindCallback);
+
+  if (query) {
     free(query);
+  } else {
+    // Restore the cursor position.
+    E.cx = saved_cx;
+    E.cy = saved_cy;
+    E.row_offset = saved_rowoff;
+    E.col_offset = saved_coloff;
+  }
 }
 
 /*** input ***/
@@ -592,7 +632,7 @@ void processKeypress() {
   size_t c = readKey();
 
   switch (c) {
-  case '\r':
+  case ENTER:
     editorInsertNewline();
     break;
 
