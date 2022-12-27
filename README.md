@@ -8,6 +8,7 @@ Based in the [Kilo editor](https://github.com/antirez/kilo) by
 
 ## Features 
   - Open and display files.
+  - Edit and save files.
   - Stauts bar.
 
 ## Usage

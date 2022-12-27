@@ -2,8 +2,10 @@
 
 #include "appendBuffer.c"
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <time.h>
@@ -14,8 +16,10 @@
 #define CTRL_KEY(k) ((k)&0x1f)
 #define TAB_STOP 4
 #define STATUS_MSG_TIMEOUT 5
+#define QUIT_TIMES 2
 
 enum editorKey {
+  BACKSPACE = 127,
   ARROW_LEFT = 1000,
   ARROW_RIGHT,
   ARROW_UP,
@@ -41,6 +45,7 @@ row new_row() {
   return r;
 }
 
+/// Holds all the state of the editor.
 struct editorConfig {
   struct termios orig_termios;
 
@@ -67,12 +72,18 @@ struct editorConfig {
   char *filename;
   appendBuffer status_msg;
   time_t status_msg_time;
+
+  // State Flags
+  int_fast8_t dirty;
 };
 
 struct editorConfig E = {0};
 
 int_fast32_t getCy() { return (E.cy - E.row_offset); }
 int_fast32_t getCx() { return (E.rx - E.col_offset); }
+
+/*** prototypes ***/
+void setStatusMessage(const char *fmt, ...);
 
 /*** terminal ***/
 void die(const char *s) {
@@ -106,7 +117,7 @@ void enableRawMode() {
     die("tcsetattr");
 }
 
-int64_t readKey() {
+size_t readKey() {
   char c = '\0';
   int32_t nread = 0;
 
@@ -183,7 +194,7 @@ int64_t readKey() {
     return ARROW_RIGHT;
   }
 
-  return (int64_t)c;
+  return (size_t)c;
 }
 
 void getCursorPosition() {
@@ -242,7 +253,7 @@ int_fast32_t editorRowCxToRx(row *row, int_fast32_t cx) {
 }
 
 /// Copies Chars into Renders and replaces tabs for spaces
-void editorUpdateRow(row *r) {
+void updateRow(row *r) {
   size_t tabs = 0;
 
   for (size_t j = 0; j < r->chars.len; j++)
@@ -274,12 +285,60 @@ void appendRow(char *s) {
   E.rows[E.num_rows] = new_row();
 
   abAppend(&E.rows[E.num_rows].chars, s);
-  editorUpdateRow(&E.rows[E.num_rows]);
+  updateRow(&E.rows[E.num_rows]);
 
   E.num_rows++;
 }
 
-/*** file i/o ***/
+void rowInsertChar(row *row, size_t at, size_t c) {
+  abInsertAt(&row->chars, at, c);
+  updateRow(row);
+}
+
+void rowDelChar(row *row, size_t at) {
+  abRemoveAt(&row->chars, at);
+  updateRow(row);
+
+  E.dirty = 1; // Mark file as dirty.
+}
+
+void editorDelChar() {
+  if (E.cy == E.num_rows)
+    return;
+
+  row *row = &E.rows[E.cy];
+
+  if (E.cx > 0) {
+    rowDelChar(row, E.cx - 1);
+    E.cx--;
+  }
+}
+
+/*** editor operations ***/
+void editorInsertChar(size_t c) {
+  if (E.cy == E.num_rows) {
+    appendRow("");
+  }
+
+  rowInsertChar(&E.rows[E.cy], E.cx, c);
+  E.cx++;
+  E.dirty = 1; // Mark file as dirty.
+}
+
+/*** file I/O ***/
+
+/// Join all the rows in the file into a single `appendBuffer`.
+appendBuffer editorRowsToString() {
+  appendBuffer ab = new_appendBuffer();
+
+  for (int_fast32_t idx = 0; idx < E.num_rows; idx++) {
+    abAppend(&ab, E.rows[idx].chars.buf);
+    abAppend(&ab, "\n");
+  }
+
+  return ab;
+}
+
 void editorOpen(char *filename) {
   FILE *fp = fopen(filename, "r");
 
@@ -303,6 +362,34 @@ void editorOpen(char *filename) {
 
   free(line);
   fclose(fp);
+}
+
+void editorSave() {
+  // TODO Will this block the UI? Probably. Make the save async.
+  if (E.filename == NULL)
+    return;
+
+  // 0644: Owner can read an write, everyone else just read.
+  int64_t fd = open(E.filename, O_RDWR | O_CREAT, 0644);
+
+  if (fd == -1) {
+    close(fd);
+    return;
+  }
+
+  appendBuffer file_content = editorRowsToString();
+
+  if (ftruncate(fd, file_content.len) == -1 ||
+      write(fd, file_content.buf, file_content.len) !=
+          (ssize_t)file_content.len) {
+    setStatusMessage("Can't save! I/O error: %s", strerror(errno));
+  } else {
+    setStatusMessage("%d bytes written to disk", file_content.len);
+    E.dirty = 0; // Mark file as clean.
+  }
+
+  close(fd);
+  abFree(&file_content);
 }
 
 /*** input ***/
@@ -339,11 +426,37 @@ void moveCursor(uint64_t key) {
 }
 
 void processKeypress() {
-  int64_t c = readKey();
+  static uint_fast8_t quit_times = QUIT_TIMES;
+
+  // TODO implement modal stuff (normal vs edit)
+  size_t c = readKey();
 
   switch (c) {
+  case '\r':
+    editorInsertChar('\t');
+    E.cx += TAB_STOP;
+    break;
+
   case CTRL_KEY('c'):
+    if (E.dirty && quit_times > 0) {
+      setStatusMessage("¡WARNING! File has unsaved changes. Press Ctrl-C %d "
+                       "more times to quit.",
+                       quit_times);
+      quit_times--;
+      return;
+    }
+    write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7); // Clear screen.
     exit(0);
+    break;
+
+  case CTRL_KEY('s'):
+    editorSave();
+    break;
+
+  case BACKSPACE:
+  case CTRL_KEY('h'):
+    editorDelChar();
+    break;
 
   case 'H':
     E.cx = 0;
@@ -365,6 +478,14 @@ void processKeypress() {
   case ARROW_LEFT:
   case ARROW_RIGHT:
     moveCursor(c);
+    break;
+
+  case CTRL_KEY('l'):
+  case '\x1b':
+    break;
+
+  default:
+    editorInsertChar(c);
     break;
   }
 }
@@ -437,8 +558,9 @@ void drawStatusBar(appendBuffer *ab) {
   char status[128] = {0};
   char rstatus[16] = {0};
 
-  size_t len = snprintf(status, sizeof(status), "> \"%.20s\" - %ldL",
-                        E.filename ? E.filename : "[No Name]", E.num_rows);
+  size_t len = snprintf(status, sizeof(status), "> \"%.20s\" - %ldL %s",
+                        E.filename ? E.filename : "[No Name]", E.num_rows,
+                        E.dirty ? "(modified)" : "");
 
   size_t rlen =
       snprintf(rstatus, sizeof(rstatus), "%ld,%ld", E.cy + 1, E.cx + 1);
@@ -526,7 +648,7 @@ int main(int argc, char *argv[]) {
   if (argc >= 2) {
     editorOpen(argv[1]);
   }
-  setStatusMessage("HELP: Ctrl-C = quit");
+  setStatusMessage("HELP: Ctrl-S = save | Ctrl-C = quit");
 
   while (1) {
     editorRefreshScreen();
