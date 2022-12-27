@@ -5,13 +5,14 @@
 #include <string.h>
 
 /*** append buffer ***/
-/// A growable buffer
+/// A growable buffer.
 typedef struct appendBuffer {
   char *buf;
   size_t cap;
   size_t len;
 } appendBuffer;
 
+/// Creates a new buffer with some memory already allocated.
 appendBuffer newAppendBuffer() {
   size_t cap = 256;
   appendBuffer ap = {calloc(sizeof(char), cap), cap, 0};
@@ -50,6 +51,33 @@ void abAppend(appendBuffer *ab, const char *s) {
   ab->buf[ab->len] = '\0'; // Null terminated
 }
 
+/// Inserts the provided char at the end of the buffer.
+void abAppendChar(appendBuffer *ab, char c) {
+  size_t new_len = ab->len + 1;
+
+  if (ab->cap <= new_len) {
+    abResize(ab, new_len);
+  }
+
+  ab->buf[ab->len] = c;
+  ab->len = new_len;
+  ab->buf[ab->len] = '\0'; // Null terminated
+}
+
+/// Removes and returns the char at the end of the buffer.
+char abPop(appendBuffer *ab) {
+  char out = '\0';
+
+  if (ab->len != 0) {
+    ab->len -= 1;
+    out = ab->buf[ab->len];
+    ab->buf[ab->len] = '\0';
+  }
+
+  return out;
+}
+
+/// Copies all the contents of the `src` buffer into the `dst` buffer.
 void abCopyInto(appendBuffer *src, appendBuffer *dst) {
   if (dst->cap < src->cap) {
     abResize(dst, src->cap + 1);
@@ -98,4 +126,5 @@ void abRemoveAt(appendBuffer *ab, size_t at) {
   // TODO does this move the null terminated char? I think so.
 }
 
+/// Frees the resources used by the buffer.
 void abFree(appendBuffer *ab) { free(ab->buf); }
