@@ -39,8 +39,8 @@ typedef struct row {
 
 row new_row() {
   row r = {0};
-  r.chars = new_appendBuffer();
-  r.render = new_appendBuffer();
+  r.chars = newAppendBuffer();
+  r.render = newAppendBuffer();
 
   return r;
 }
@@ -329,7 +329,7 @@ void editorInsertChar(size_t c) {
 
 /// Join all the rows in the file into a single `appendBuffer`.
 appendBuffer editorRowsToString() {
-  appendBuffer ab = new_appendBuffer();
+  appendBuffer ab = newAppendBuffer();
 
   for (int_fast32_t idx = 0; idx < E.num_rows; idx++) {
     abAppend(&ab, E.rows[idx].chars.buf);
@@ -599,7 +599,7 @@ void drawMessageBar(appendBuffer *ab) {
 void editorRefreshScreen() {
   editorScroll();
 
-  appendBuffer ab = new_appendBuffer();
+  appendBuffer ab = newAppendBuffer();
 
   // https: // vt100.net/docs/vt100-ug/chapter3.html#ED
   abAppend(&ab, "\x1b[?25l"); // Hide cursor

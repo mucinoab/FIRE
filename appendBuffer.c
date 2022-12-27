@@ -12,8 +12,8 @@ typedef struct appendBuffer {
   size_t len;
 } appendBuffer;
 
-appendBuffer new_appendBuffer() {
-  const size_t cap = 256;
+appendBuffer newAppendBuffer() {
+  size_t cap = 256;
   appendBuffer ap = {calloc(sizeof(char), cap), cap, 0};
 
   return ap;
@@ -33,18 +33,18 @@ void abResize(appendBuffer *ab, size_t cap) {
 
 /// Inserts the given string to the end of the buffer.
 void abAppend(appendBuffer *ab, const char *s) {
-  size_t len = strlen(s);
+  size_t extra_needed = strlen(s);
 
-  if (len == 0) {
+  if (extra_needed == 0) {
     return;
   }
 
-  size_t new_len = ab->len + len;
+  size_t new_len = ab->len + extra_needed;
   if (ab->cap <= new_len) {
     abResize(ab, new_len);
   }
 
-  memcpy(&ab->buf[ab->len], s, len);
+  memcpy(&ab->buf[ab->len], s, extra_needed);
   ab->len = new_len;
 
   ab->buf[ab->len] = '\0'; // Null terminated
