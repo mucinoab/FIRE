@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 
 #include "appendBuffer.c"
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -20,6 +21,8 @@
 
 enum editorKey {
   BACKSPACE = 127,
+  ESC = '\x1b',
+  ENTER = '\r',
   ARROW_LEFT = 1000,
   ARROW_RIGHT,
   ARROW_UP,
@@ -83,6 +86,8 @@ uint_fast32_t getCy() { return (E.cy - E.row_offset); }
 uint_fast32_t getCx() { return (E.rx - E.col_offset); }
 
 /*** prototypes ***/
+char *editorPrompt(char *prompt);
+void editorRefreshScreen();
 void setStatusMessage(const char *fmt, ...);
 
 /*** terminal ***/
@@ -423,8 +428,14 @@ void editorOpen(char *filename) {
 
 void editorSave() {
   // TODO Will this block the UI? Probably. Make the save async.
-  if (E.filename == NULL)
-    return;
+  if (E.filename == NULL) {
+    E.filename = editorPrompt("Save as: %s");
+
+    if (E.filename == NULL) {
+      setStatusMessage("Save aborted");
+      return;
+    }
+  }
 
   // 0644: Owner can read an write, everyone else just read.
   int64_t fd = open(E.filename, O_RDWR | O_CREAT, 0644);
@@ -450,6 +461,42 @@ void editorSave() {
 }
 
 /*** input ***/
+
+char *editorPrompt(char *prompt) {
+  // TODO put cursor in the status bar.
+  appendBuffer input = newAppendBuffer();
+
+  while (1) {
+    setStatusMessage(prompt, input.buf);
+    editorRefreshScreen();
+
+    size_t c = readKey();
+
+    switch (c) {
+    case BACKSPACE:
+      abPop(&input);
+      break;
+
+    case ESC:
+      setStatusMessage("");
+      abFree(&input);
+      return NULL;
+
+    case ENTER:
+      if (input.len != 0) {
+        setStatusMessage("");
+        return input.buf; // TODO free the rest of the input.
+      }
+      break;
+
+    default:
+      if (!iscntrl(c) && c < 128)
+        abAppendChar(&input, c);
+      break;
+    }
+  }
+}
+
 void moveCursor(uint64_t key) {
   appendBuffer *row = (E.cy >= E.num_rows) ? NULL : &E.rows[E.cy].chars;
 
@@ -473,8 +520,8 @@ void moveCursor(uint64_t key) {
     break;
   }
 
-  // If you change to a shorter line, the cursor column position should move
-  // too.
+  // If you change to a shorter line, the cursor column position should
+  // move too.
   row = (E.cy >= E.num_rows) ? NULL : &E.rows[E.cy].chars;
   uint_fast32_t rowlen = row ? row->len : 0;
   if (E.cx > rowlen) {
@@ -602,8 +649,8 @@ void drawRows(appendBuffer *ab) {
       abAppend(ab, "\x1b[m");
     }
 
-    // Erases from current position to the end of the line and jumps to new
-    // line.
+    // Erases from current position to the end of the line and jumps to
+    // new line.
     abAppend(ab, "\x1b[K\r\n");
   }
 
@@ -632,8 +679,9 @@ void drawStatusBar(appendBuffer *ab) {
     abAppend(ab, " ");
     len++;
   }
-  abAppend(ab, rstatus);      // Ruler: line and column position of the cursor.
-  abAppend(ab, "\x1b[m\r\n"); // Revert inverted colors and move to new line.
+  abAppend(ab, rstatus); // Ruler: line and column position of the cursor.
+  abAppend(ab,
+           "\x1b[m\r\n"); // Revert inverted colors and move to new line.
 }
 
 void drawMessageBar(appendBuffer *ab) {
