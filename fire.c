@@ -50,18 +50,18 @@ struct editorConfig {
   struct termios orig_termios;
 
   // Size of the terminal
-  int_fast32_t screen_cols;
-  int_fast32_t screen_rows;
+  uint_fast32_t screen_cols;
+  uint_fast32_t screen_rows;
 
   // Cursor Position
-  int_fast32_t cx;
-  int_fast32_t cy;
+  uint_fast32_t cx;
+  uint_fast32_t cy;
 
   // Cursor Render Position
-  int_fast32_t rx;
+  uint_fast32_t rx;
 
   // File contents, line by line
-  int_fast32_t num_rows;
+  uint_fast32_t num_rows;
   row *rows;
 
   // Current view posiiton
@@ -74,13 +74,13 @@ struct editorConfig {
   time_t status_msg_time;
 
   // State Flags
-  int_fast8_t dirty;
+  uint_fast8_t dirty;
 };
 
 struct editorConfig E = {0};
 
-int_fast32_t getCy() { return (E.cy - E.row_offset); }
-int_fast32_t getCx() { return (E.rx - E.col_offset); }
+uint_fast32_t getCy() { return (E.cy - E.row_offset); }
+uint_fast32_t getCx() { return (E.rx - E.col_offset); }
 
 /*** prototypes ***/
 void setStatusMessage(const char *fmt, ...);
@@ -216,7 +216,7 @@ void getCursorPosition() {
   if (buf[0] != '\x1b' || buf[1] != '[')
     die("cursor");
 
-  if (sscanf(&buf[2], "%li;%li", &E.cx, &E.cy) != 2)
+  if (sscanf(&buf[2], "%lu;%lu", &E.cx, &E.cy) != 2)
     die("cursor");
 }
 
@@ -279,15 +279,36 @@ void updateRow(row *r) {
   r->render.len = idx;
 }
 
-void appendRow(char *s) {
-  // TODO efficient resize
-  E.rows = realloc(E.rows, sizeof(*E.rows) * (E.num_rows + 1));
-  E.rows[E.num_rows] = new_row();
+void insertRowAt(char *s, size_t at) {
+  if (at > E.num_rows)
+    return;
 
-  abAppend(&E.rows[E.num_rows].chars, s);
-  updateRow(&E.rows[E.num_rows]);
+  // TODO efficient resize.
+  E.rows = realloc(E.rows, sizeof(row) * (E.num_rows + 1));
+  memmove(&E.rows[at + 1], &E.rows[at], sizeof(row) * (E.num_rows - at));
+
+  E.rows[at] = new_row();
+  abAppend(&E.rows[at].chars, s);
+  updateRow(&E.rows[at]);
 
   E.num_rows++;
+}
+
+void editorFreeRow(row *row) {
+  abFree(&row->chars);
+  abFree(&row->render);
+}
+
+void editorDelRow(size_t at) {
+  if (at >= (size_t)E.num_rows)
+    return;
+
+  editorFreeRow(&E.rows[at]);
+
+  memmove(&E.rows[at], &E.rows[at + 1], sizeof(row) * (E.num_rows - at - 1));
+
+  E.num_rows--;
+  E.dirty = 1; // Mark file as dirty.
 }
 
 void rowInsertChar(row *row, size_t at, size_t c) {
@@ -302,8 +323,37 @@ void rowDelChar(row *row, size_t at) {
   E.dirty = 1; // Mark file as dirty.
 }
 
+void editorRowAppendString(row *src, row *dst) {
+  abAppend(&dst->chars, src->chars.buf);
+  updateRow(dst);
+
+  E.dirty = 1; // Mark file as dirty.
+}
+
+void editorInsertNewline() {
+  if (E.cx == 0) {
+    insertRowAt("", E.cy);
+  } else {
+    row *row = &E.rows[E.cy];
+
+    insertRowAt(&row->chars.buf[E.cx], E.cy + 1); // TODO fix length maybe
+    row = &E.rows[E.cy];
+    row->chars.len = E.cx;
+    row->chars.buf[row->chars.len] = '\0';
+
+    updateRow(row);
+  }
+
+  E.cy++;
+  E.cx = 0;
+}
+
 void editorDelChar() {
   if (E.cy == E.num_rows)
+    return;
+
+  // On the first char of the file.
+  if (E.cx == 0 && E.cy == 0)
     return;
 
   row *row = &E.rows[E.cy];
@@ -311,13 +361,20 @@ void editorDelChar() {
   if (E.cx > 0) {
     rowDelChar(row, E.cx - 1);
     E.cx--;
+  } else {
+    // At the beginning of a line, we have to move the contents of the current
+    // line to the one above it.
+    E.cx = E.rows[E.cy - 1].chars.len;
+    editorRowAppendString(row, &E.rows[E.cy - 1]);
+    editorDelRow(E.cy);
+    E.cy--;
   }
 }
 
 /*** editor operations ***/
 void editorInsertChar(size_t c) {
   if (E.cy == E.num_rows) {
-    appendRow("");
+    insertRowAt("", 0);
   }
 
   rowInsertChar(&E.rows[E.cy], E.cx, c);
@@ -331,7 +388,7 @@ void editorInsertChar(size_t c) {
 appendBuffer editorRowsToString() {
   appendBuffer ab = newAppendBuffer();
 
-  for (int_fast32_t idx = 0; idx < E.num_rows; idx++) {
+  for (uint_fast32_t idx = 0; idx < E.num_rows; idx++) {
     abAppend(&ab, E.rows[idx].chars.buf);
     abAppend(&ab, "\n");
   }
@@ -357,7 +414,7 @@ void editorOpen(char *filename) {
       linelen--;
 
     line[linelen] = '\0';
-    appendRow(line);
+    insertRowAt(line, E.num_rows);
   }
 
   free(line);
@@ -410,7 +467,7 @@ void moveCursor(uint64_t key) {
       E.cx--;
     break;
   case ARROW_RIGHT:
-    if (row && E.cx < (int_fast32_t)row->len) {
+    if (row && E.cx < (uint_fast32_t)row->len) {
       E.cx++;
     }
     break;
@@ -419,7 +476,7 @@ void moveCursor(uint64_t key) {
   // If you change to a shorter line, the cursor column position should move
   // too.
   row = (E.cy >= E.num_rows) ? NULL : &E.rows[E.cy].chars;
-  int_fast32_t rowlen = row ? row->len : 0;
+  uint_fast32_t rowlen = row ? row->len : 0;
   if (E.cx > rowlen) {
     E.cx = rowlen;
   }
@@ -433,8 +490,7 @@ void processKeypress() {
 
   switch (c) {
   case '\r':
-    editorInsertChar('\t');
-    E.cx += TAB_STOP;
+    editorInsertNewline();
     break;
 
   case CTRL_KEY('c'):
@@ -498,14 +554,14 @@ void editorScroll() {
     E.rx = editorRowCxToRx(&E.rows[E.cy], E.cx);
   }
 
-  if (E.cy < E.row_offset) {
+  if (E.cy < (uint_fast32_t)E.row_offset) {
     E.row_offset = E.cy;
   }
   if (E.cy >= E.row_offset + E.screen_rows) {
     E.row_offset = E.cy - E.screen_rows + 1;
   }
 
-  if (E.rx < E.col_offset) {
+  if (E.rx < (uint_fast32_t)E.col_offset) {
     E.col_offset = E.rx;
   }
   if (E.rx >= E.col_offset + E.screen_cols) {
@@ -514,8 +570,8 @@ void editorScroll() {
 }
 
 void drawRows(appendBuffer *ab) {
-  for (int_fast32_t y = 0; y < E.screen_rows; y++) {
-    int_fast32_t file_row = y + E.row_offset;
+  for (uint_fast32_t y = 0; y < E.screen_rows; y++) {
+    uint_fast32_t file_row = y + E.row_offset;
     abAppend(ab, "~");
 
     if (y == getCy()) {
@@ -529,7 +585,7 @@ void drawRows(appendBuffer *ab) {
       if (len < 0)
         len = 0;
 
-      if (E.screen_cols < len)
+      if (E.screen_cols < (uint_fast32_t)len)
         len = E.screen_cols - 1;
 
       char place_holder = E.rows[file_row].render.buf[len + E.col_offset];
@@ -546,7 +602,8 @@ void drawRows(appendBuffer *ab) {
       abAppend(ab, "\x1b[m");
     }
 
-    // Erases part of the current line and jumps to new line.
+    // Erases from current position to the end of the line and jumps to new
+    // line.
     abAppend(ab, "\x1b[K\r\n");
   }
 
@@ -613,7 +670,8 @@ void editorRefreshScreen() {
   char buf[16] = {0};
   snprintf(buf, sizeof(buf), "\x1b[%lu;%luH", getCy() + 1, getCx() + 2);
   abAppend(&ab, buf);
-
+  // Set cursor as a beam:  | "\033[2 q" is for block: █
+  abAppend(&ab, "\033[6 q");
   abAppend(&ab, "\x1b[?25h"); // Show cursor
   write(STDOUT_FILENO, ab.buf, ab.len);
 
