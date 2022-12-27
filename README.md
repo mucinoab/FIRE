@@ -9,7 +9,7 @@ Based in the [Kilo editor](https://github.com/antirez/kilo) by
 ## Features 
   - Open and display files.
   - Edit and save files.
-  - Search file contents.
+  - Incrementally search file contents.
   - Stauts bar.
 
 ## Usage

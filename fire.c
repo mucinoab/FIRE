@@ -86,7 +86,7 @@ uint_fast32_t getCy() { return (E.cy - E.row_offset); }
 uint_fast32_t getCx() { return (E.rx - E.col_offset); }
 
 /*** prototypes ***/
-char *editorPrompt(char *prompt);
+char *editorPrompt(char *prompt, void (*callback)(char *, size_t));
 void editorRefreshScreen();
 void setStatusMessage(const char *fmt, ...);
 
@@ -445,7 +445,7 @@ void editorOpen(char *filename) {
 void editorSave() {
   // TODO Will this block the UI? Probably. Make the save async.
   if (E.filename == NULL) {
-    E.filename = editorPrompt("Save as: %s");
+    E.filename = editorPrompt("Save as: %s", NULL);
 
     if (E.filename == NULL) {
       setStatusMessage("Save aborted");
@@ -478,36 +478,38 @@ void editorSave() {
 
 /*** find ***/
 
-/// Prompt the user for a string and moves the cursor to
-void editorFind() {
-  char *query = editorPrompt("Search: %s (ESC to cancel)");
-  char *match = NULL;
-
-  if (query == NULL)
+void editorFindCallback(char *query, size_t key) {
+  if (key == '\r' || key == '\x1b') {
     return;
+  }
 
   for (uint_fast32_t i = 0; i < E.num_rows; i++) {
     row *row = &E.rows[i];
-    match = strstr(row->render.buf, query);
+    char *match = strstr(row->render.buf, query);
 
     if (match) {
       E.cy = i;
       E.cx = editorRowRxToCx(row, match - row->render.buf);
       E.row_offset = E.num_rows;
-
       break;
     }
   }
+}
 
-  if (match == NULL)
-    setStatusMessage("Pattern not found"); // TODO show the query used.
+/// Prompts the user for a string and moves the cursor to the first match in the
+/// file.
+void editorFind() {
+  // TODO incremental search, highlight all the matches and add ability to loop
+  // through them.
+  char *query = editorPrompt("Search: %s (ESC to cancel)", editorFindCallback);
 
-  free(query);
+  if (query)
+    free(query);
 }
 
 /*** input ***/
 
-char *editorPrompt(char *prompt) {
+char *editorPrompt(char *prompt, void (*callback)(char *, size_t)) {
   // TODO put cursor in the status bar.
   appendBuffer input = newAppendBuffer();
 
@@ -524,12 +526,18 @@ char *editorPrompt(char *prompt) {
 
     case ESC:
       setStatusMessage("");
+      if (callback)
+        callback(input.buf, c);
+
       abFree(&input);
       return NULL;
 
     case ENTER:
       if (input.len != 0) {
         setStatusMessage("");
+        if (callback)
+          callback(input.buf, c);
+
         return input.buf; // TODO free the rest of the input.
       }
       break;
@@ -539,6 +547,9 @@ char *editorPrompt(char *prompt) {
         abAppendChar(&input, c);
       break;
     }
+
+    if (callback)
+      callback(input.buf, c);
   }
 }
 
