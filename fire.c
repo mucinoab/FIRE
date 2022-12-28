@@ -56,6 +56,9 @@ struct editorConfig {
   uint_fast32_t screen_cols;
   uint_fast32_t screen_rows;
 
+  // Left margin width
+  uint_fast32_t left_margin;
+
   // Cursor Position
   uint_fast32_t cx;
   uint_fast32_t cy;
@@ -605,7 +608,7 @@ void moveCursor(uint64_t key) {
       E.cy--;
     break;
   case ARROW_LEFT:
-    if (E.cx != 0)
+    if (E.cx > (E.left_margin - 3))
       E.cx--;
     break;
   case ARROW_RIGHT:
@@ -715,15 +718,50 @@ void editorScroll() {
   }
 }
 
+char *foreground_from_rgb(char *buf, uint8_t r, uint8_t g, uint8_t b) {
+  snprintf(buf, 32, "\033[48;2;%i;%i;%im", r, g, b);
+  return buf;
+}
+
+char *background_from_rgb(char *buf, uint8_t r, uint8_t g, uint8_t b) {
+  snprintf(buf, 32, "\033[38;2;%i;%i;%im", r, g, b);
+  return buf;
+}
+
+void add_line_number(appendBuffer *ab, uint_fast32_t line, size_t max_width) {
+  if (line > E.num_rows) {
+    // File content is smaller than the height of the screen.
+    return;
+  }
+
+  char back[32] = {0};
+  char buf[8] = {0};
+  char pad[8] = {0};
+
+  size_t idx = 0;
+  size_t num_digits = (size_t)floor(log10(line));
+
+  while (idx != (max_width - num_digits))
+    pad[idx++] = ' ';
+
+  if (getCy() == (line - 1 - E.row_offset))   // Current row.
+    background_from_rgb(back, 150, 188, 100); // Green.
+  else                                        // Grey.
+    background_from_rgb(back, 60, 65, 72);
+
+  abAppend(ab, back);
+  snprintf(buf, 8, "%s%lu ", pad, line);
+  abAppend(ab, buf);
+  abAppend(ab, background_from_rgb(back, 51, 187, 200)); // Restore, blueish
+}
+
 void drawRows(appendBuffer *ab) {
+  size_t row_num_width = (size_t)floor(log10(E.num_rows + 1));
+  E.left_margin = row_num_width + 1;
+
   for (uint_fast32_t y = 0; y < E.screen_rows; y++) {
     uint_fast32_t file_row = y + E.row_offset;
-    abAppend(ab, "~");
-
-    if (y == getCy()) {
-      // Underline current row.
-      abAppend(ab, "\x1b[4m");
-    }
+    add_line_number(ab, file_row + 1, row_num_width);
 
     if (file_row < E.num_rows) {
       int_fast32_t len = E.rows[file_row].render.len - E.col_offset;
@@ -741,11 +779,6 @@ void drawRows(appendBuffer *ab) {
 
       // Resotre the original line
       E.rows[file_row].render.buf[len + E.col_offset] = place_holder;
-    }
-
-    if (y == getCy()) {
-      // Unset underline for current row.
-      abAppend(ab, "\x1b[m");
     }
 
     // Erases from current position to the end of the line and jumps to
@@ -802,6 +835,8 @@ void drawMessageBar(appendBuffer *ab) {
 
 void editorRefreshScreen() {
   // TODO take into account screen resize.
+  //
+  char back[32] = {0};
   editorScroll();
 
   appendBuffer ab = newAppendBuffer();
@@ -810,13 +845,17 @@ void editorRefreshScreen() {
   abAppend(&ab, "\x1b[?25l"); // Hide cursor
   abAppend(&ab, "\x1b[H");    // Put cursor at the top left.
 
+  abAppend(&ab, foreground_from_rgb(back, 38, 42, 51));   // blueish
+  abAppend(&ab, background_from_rgb(back, 51, 187, 200)); // blueish
+
   drawRows(&ab);
   drawStatusBar(&ab);
   drawMessageBar(&ab);
 
   // Put cursor at his position.
   char buf[16] = {0};
-  snprintf(buf, sizeof(buf), "\x1b[%lu;%luH", getCy() + 1, getCx() + 2);
+  snprintf(buf, sizeof(buf), "\x1b[%lu;%luH", getCy() + 1,
+           getCx() + 2 + E.left_margin);
   abAppend(&ab, buf);
   // Set cursor as a beam:  | "\033[2 q" is for block: █
   abAppend(&ab, "\033[6 q");

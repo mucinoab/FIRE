@@ -15,7 +15,7 @@ typedef struct appendBuffer {
 /// Creates a new buffer with some memory already allocated.
 appendBuffer newAppendBuffer() {
   size_t cap = 256;
-  appendBuffer ap = {.buf = calloc(sizeof(char), cap), .cap = cap, .len = 0};
+  appendBuffer ap = {.buf = calloc(cap, sizeof(char)), .cap = cap, .len = 0};
 
   return ap;
 }
