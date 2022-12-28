@@ -122,8 +122,8 @@ void enableRawMode() {
     die("tcsetattr");
 }
 
-size_t readKey() {
-  char c = '\0';
+uint64_t readKey() {
+  uint64_t c = '\0';
   int32_t nread = 0;
 
   while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
@@ -131,14 +131,14 @@ size_t readKey() {
       die("read");
   }
 
-  // Handle multibyte sequeces
+  // Handle multibyte sequences.
   if (c == '\x1b') {
-    char seq[3] = {0};
+    uint64_t seq[3] = {0};
     if (read(STDIN_FILENO, &seq[0], 1) != 1)
-      return (int64_t)c;
+      return c;
 
     if (read(STDIN_FILENO, &seq[1], 1) != 1)
-      return (int64_t)c;
+      return c;
 
     if (seq[0] == '[') {
       if (seq[1] >= '0' && seq[1] <= '9') {
@@ -199,7 +199,7 @@ size_t readKey() {
     return ARROW_RIGHT;
   }
 
-  return (size_t)c;
+  return c;
 }
 
 void getCursorPosition() {
@@ -523,11 +523,10 @@ void editorFindCallback(char *query, size_t key) {
   }
 }
 
-/// Prompts the user for a string and moves the cursor to the first match in the
-/// file.
+/// Prompts the user for a string and moves the cursor to the first match in
+/// the file.
 void editorFind() {
-  // TODO incremental search, highlight all the matches and add ability to loop
-  // through them.
+  // TODO Highlight all the matches.
   uint_fast32_t saved_cx = E.cx;
   uint_fast32_t saved_cy = E.cy;
   uint_fast32_t saved_rowoff = E.row_offset;
@@ -557,7 +556,7 @@ char *editorPrompt(char *prompt, void (*callback)(char *, size_t)) {
     setStatusMessage(prompt, input.buf);
     editorRefreshScreen();
 
-    size_t c = readKey();
+    uint64_t c = readKey();
 
     switch (c) {
     case BACKSPACE:
@@ -629,7 +628,7 @@ void processKeypress() {
   static uint_fast8_t quit_times = QUIT_TIMES;
 
   // TODO implement modal stuff (normal vs edit)
-  size_t c = readKey();
+  uint64_t c = readKey();
 
   switch (c) {
   case ENTER:
@@ -802,6 +801,7 @@ void drawMessageBar(appendBuffer *ab) {
 }
 
 void editorRefreshScreen() {
+  // TODO take into account screen resize.
   editorScroll();
 
   appendBuffer ab = newAppendBuffer();
