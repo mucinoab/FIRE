@@ -35,6 +35,8 @@ enum editorKey {
 
 enum editorHighlight { HL_NORMAL = 0, HL_NUMBER, HL_MATCH };
 
+typedef enum Mode { NORMAL, INSERT } Mode;
+
 /*** data ***/
 
 typedef struct row {
@@ -84,6 +86,7 @@ struct editorConfig {
 
   // State Flags
   uint_fast8_t dirty;
+  Mode mode;
 };
 
 struct editorConfig E = {0};
@@ -192,17 +195,6 @@ uint64_t readKey() {
         return END_KEY;
       }
     }
-  }
-
-  switch (c) {
-  case 'j':
-    return ARROW_DOWN;
-  case 'k':
-    return ARROW_UP;
-  case 'h':
-    return ARROW_LEFT;
-  case 'l':
-    return ARROW_RIGHT;
   }
 
   return c;
@@ -673,11 +665,77 @@ void moveCursor(uint64_t key) {
   }
 }
 
-void processKeypress() {
+void handleNormalKey(uint64_t c) {
   static uint_fast8_t quit_times = QUIT_TIMES;
 
-  // TODO implement modal stuff (normal vs edit)
-  uint64_t c = readKey();
+  switch (c) {
+  case ENTER:
+    E.cy += 1; // Move to the line below.
+    break;
+
+  case CTRL_KEY('c'):
+    if (E.dirty && quit_times > 0) {
+      setStatusMessage("¡WARNING! File has unsaved changes. Press Ctrl-C %d "
+                       "more times to quit.",
+                       quit_times);
+      quit_times--;
+      return;
+    }
+    write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7); // Clear screen.
+    exit(0);
+    break;
+
+  case CTRL_KEY('s'):
+    editorSave();
+    break;
+
+  case BACKSPACE:
+    E.cx -= 1;
+    break;
+
+  case 'H': // Move to beginning of line.
+    E.cx = 0;
+    break;
+  case 'L': // Move to end of line.
+    E.cx = E.rows[E.cy].render.len;
+    break;
+
+  // Cursor movements
+  case ARROW_DOWN:
+  case ARROW_UP:
+  case ARROW_LEFT:
+  case ARROW_RIGHT:
+    moveCursor(c);
+    break;
+  case 'j':
+    moveCursor(ARROW_DOWN);
+    break;
+  case 'k':
+    moveCursor(ARROW_UP);
+    break;
+  case 'h':
+    moveCursor(ARROW_LEFT);
+    break;
+  case 'l':
+    moveCursor(ARROW_RIGHT);
+    break;
+
+  case '/':
+    editorFind();
+    break;
+
+  case 'i':
+    E.mode = INSERT;
+    break;
+
+  default:
+    // No Op
+    break;
+  }
+}
+
+void handleInsertKey(uint64_t c) {
+  static uint_fast8_t quit_times = QUIT_TIMES;
 
   switch (c) {
   case ENTER:
@@ -705,21 +763,7 @@ void processKeypress() {
     editorDelChar();
     break;
 
-  case 'H':
-    E.cx = 0;
-    break;
-  case 'L':
-    E.cx = E.screen_cols - 1;
-    break;
-
-  case PAGE_UP:
-  case PAGE_DOWN: {
-    uint_fast16_t times = E.screen_rows;
-    while (times--)
-      moveCursor(PAGE_UP ? ARROW_UP : ARROW_DOWN);
-  } break;
-
-  // Cursor movment
+  // Cursor movement
   case ARROW_DOWN:
   case ARROW_UP:
   case ARROW_LEFT:
@@ -727,18 +771,23 @@ void processKeypress() {
     moveCursor(c);
     break;
 
-  case CTRL_KEY('l'):
-  case '\x1b':
-    break;
-
-  case '/':
-    editorFind();
+  case ESC:
+    E.mode = NORMAL;
     break;
 
   default:
     editorInsertChar(c);
     break;
   }
+}
+
+void processKeypress() {
+  uint64_t c = readKey();
+
+  if (E.mode == NORMAL)
+    handleNormalKey(c);
+  else
+    handleInsertKey(c);
 }
 
 /*** output ***/
@@ -855,11 +904,19 @@ void drawRows(appendBuffer *ab) {
 
 void drawStatusBar(appendBuffer *ab) {
   // TODO Handle narrow terminals.
-  char status[128] = {0};
+  char status[256] = {0};
   char rstatus[16] = {0};
+  char back[32] = {0};
+  char *mode = E.mode == NORMAL ? "Normal" : "Insert";
 
-  size_t len = snprintf(status, sizeof(status), "> \"%.20s\" - %ldL %s",
-                        E.filename ? E.filename : "[No Name]", E.num_rows,
+  if (E.mode == NORMAL) {
+    abAppend(ab, background_from_rgb(back, 242, 198, 128)); // Orange
+  } else {
+    abAppend(ab, background_from_rgb(back, 93, 198, 128)); // Green
+  }
+
+  size_t len = snprintf(status, sizeof(status), "%s > \"%.20s\" - %ldL %s",
+                        mode, E.filename ? E.filename : "[No Name]", E.num_rows,
                         E.dirty ? "(modified)" : "");
 
   size_t rlen =
@@ -920,8 +977,13 @@ void editorRefreshScreen() {
   snprintf(buf, sizeof(buf), "\x1b[%lu;%luH", getCy() + 1,
            getCx() + 2 + E.left_margin);
   abAppend(&ab, buf);
-  // Set cursor as a beam:  | "\033[2 q" is for block: █
-  abAppend(&ab, "\033[6 q");
+
+  if (E.mode == NORMAL) {
+    abAppend(&ab, "\033[2 q"); // Cursor as a block: █
+  } else {
+    abAppend(&ab, "\033[6 q"); // Cursor as a beam:  |
+  }
+
   abAppend(&ab, "\x1b[?25h"); // Show cursor
   write(STDOUT_FILENO, ab.buf, ab.len);
 
@@ -948,6 +1010,7 @@ void initEditor() {
 
   // Leave space for the status bar and message bar.
   E.screen_rows -= 2;
+  E.mode = NORMAL;
 }
 
 int main(int argc, char *argv[]) {
