@@ -1,103 +1,15 @@
-#define _GNU_SOURCE
-
-#include "appendBuffer.c"
+#include "base.c"
+#include "insertMode.c"
+#include "normalMode.c"
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
-
-/*** defines ***/
-/// It sets the upper 3 bits of the character to 0, like the Ctrl key.
-#define CTRL_KEY(k) ((k)&0x1f)
-#define TAB_STOP 4
-#define STATUS_MSG_TIMEOUT 5
-#define QUIT_TIMES 2
-
-enum editorKey {
-  BACKSPACE = 127,
-  ESC = '\x1b',
-  ENTER = '\r',
-  ARROW_LEFT = 1000,
-  ARROW_RIGHT,
-  ARROW_UP,
-  ARROW_DOWN,
-  HOME_KEY,
-  END_KEY,
-  PAGE_UP,
-  PAGE_DOWN
-};
-
-enum editorHighlight { HL_NORMAL = 0, HL_NUMBER, HL_MATCH };
-
-typedef enum Mode { NORMAL, INSERT } Mode;
-
-/*** data ***/
-
-typedef struct row {
-  appendBuffer chars;
-  appendBuffer render;
-  uint8_t *hl; // Highlight information. TODO use a bitset.
-} row;
-
-row new_row() {
-  row r = {0};
-  r.chars = newAppendBuffer();
-  r.render = newAppendBuffer();
-
-  return r;
-}
-
-/// Holds all the state of the editor.
-struct editorConfig {
-  struct termios orig_termios;
-
-  // Size of the terminal
-  uint_fast32_t screen_cols;
-  uint_fast32_t screen_rows;
-
-  // Left margin width
-  uint_fast32_t left_margin;
-
-  // Cursor Position
-  uint_fast32_t cx;
-  uint_fast32_t cy;
-
-  // Cursor Render Position
-  uint_fast32_t rx;
-
-  // File contents, line by line
-  uint_fast32_t num_rows;
-  row *rows;
-
-  // Current view posiiton
-  int_fast32_t row_offset;
-  int_fast32_t col_offset;
-
-  // Status bar stuff
-  char *filename;
-  appendBuffer status_msg;
-  time_t status_msg_time;
-
-  // State Flags
-  uint_fast8_t dirty;
-  Mode mode;
-};
-
-struct editorConfig E = {0};
-
-uint_fast32_t getCy() { return (E.cy - E.row_offset); }
-uint_fast32_t getCx() { return (E.rx - E.col_offset); }
-
-/*** prototypes ***/
-char *editorPrompt(char *prompt, void (*callback)(char *, size_t));
-void editorRefreshScreen();
-void setStatusMessage(const char *fmt, ...);
 
 /*** terminal ***/
 void die(const char *s) {
@@ -227,7 +139,7 @@ void getWindowSize() {
   struct winsize ws = {0};
 
   if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
-    // Put cursor at the end of the screen and read the positon.
+    // Put cursor at the end of the screen and read the position.
     write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12);
     getCursorPosition();
 
@@ -634,11 +546,13 @@ char *editorPrompt(char *prompt, void (*callback)(char *, size_t)) {
 }
 
 void moveCursor(uint64_t key) {
+  static uint_fast32_t last_non_zero_pos = 1;
+  static uint_fast32_t last_pos = 0;
   appendBuffer *row = (E.cy >= E.num_rows) ? NULL : &E.rows[E.cy].chars;
 
   switch (key) {
   case ARROW_DOWN:
-    if (E.cy < E.num_rows)
+    if (E.cy < (E.num_rows - 1))
       E.cy++;
     break;
   case ARROW_UP:
@@ -646,7 +560,7 @@ void moveCursor(uint64_t key) {
       E.cy--;
     break;
   case ARROW_LEFT:
-    if (E.cx > (E.left_margin - 3))
+    if (E.cx != 0)
       E.cx--;
     break;
   case ARROW_RIGHT:
@@ -663,122 +577,20 @@ void moveCursor(uint64_t key) {
   if (E.cx > rowlen) {
     E.cx = rowlen;
   }
-}
 
-void handleNormalKey(uint64_t c) {
-  static uint_fast8_t quit_times = QUIT_TIMES;
-
-  switch (c) {
-  case ENTER:
-    E.cy += 1; // Move to the line below.
-    break;
-
-  case CTRL_KEY('c'):
-    if (E.dirty && quit_times > 0) {
-      setStatusMessage("¡WARNING! File has unsaved changes. Press Ctrl-C %d "
-                       "more times to quit.",
-                       quit_times);
-      quit_times--;
-      return;
+  // Keep ~the same x position while scrolling down/up.
+  if (key == ARROW_UP || key == ARROW_DOWN)
+    if (E.cx == 0 && row && last_pos == 0) {
+      // https://graphics.stanford.edu/~seander/bithacks.html#IntegerMinOrMax
+      // Just for fun.
+      uint_fast32_t x = row->len;
+      uint_fast32_t y = last_non_zero_pos;
+      E.cx = y ^ ((x ^ y) & -(x < y)); // min(x, y)
     }
-    write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7); // Clear screen.
-    exit(0);
-    break;
 
-  case CTRL_KEY('s'):
-    editorSave();
-    break;
-
-  case BACKSPACE:
-    E.cx -= 1;
-    break;
-
-  case 'H': // Move to beginning of line.
-    E.cx = 0;
-    break;
-  case 'L': // Move to end of line.
-    E.cx = E.rows[E.cy].render.len;
-    break;
-
-  // Cursor movements
-  case ARROW_DOWN:
-  case ARROW_UP:
-  case ARROW_LEFT:
-  case ARROW_RIGHT:
-    moveCursor(c);
-    break;
-  case 'j':
-    moveCursor(ARROW_DOWN);
-    break;
-  case 'k':
-    moveCursor(ARROW_UP);
-    break;
-  case 'h':
-    moveCursor(ARROW_LEFT);
-    break;
-  case 'l':
-    moveCursor(ARROW_RIGHT);
-    break;
-
-  case '/':
-    editorFind();
-    break;
-
-  case 'i':
-    E.mode = INSERT;
-    break;
-
-  default:
-    // No Op
-    break;
-  }
-}
-
-void handleInsertKey(uint64_t c) {
-  static uint_fast8_t quit_times = QUIT_TIMES;
-
-  switch (c) {
-  case ENTER:
-    editorInsertNewline();
-    break;
-
-  case CTRL_KEY('c'):
-    if (E.dirty && quit_times > 0) {
-      setStatusMessage("¡WARNING! File has unsaved changes. Press Ctrl-C %d "
-                       "more times to quit.",
-                       quit_times);
-      quit_times--;
-      return;
-    }
-    write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7); // Clear screen.
-    exit(0);
-    break;
-
-  case CTRL_KEY('s'):
-    editorSave();
-    break;
-
-  case BACKSPACE:
-  case CTRL_KEY('h'):
-    editorDelChar();
-    break;
-
-  // Cursor movement
-  case ARROW_DOWN:
-  case ARROW_UP:
-  case ARROW_LEFT:
-  case ARROW_RIGHT:
-    moveCursor(c);
-    break;
-
-  case ESC:
-    E.mode = NORMAL;
-    break;
-
-  default:
-    editorInsertChar(c);
-    break;
-  }
+  if (E.cx != 0)
+    last_non_zero_pos = E.cx;
+  last_pos = E.cx;
 }
 
 void processKeypress() {
@@ -824,7 +636,7 @@ char *background_from_rgb(char *buf, uint8_t r, uint8_t g, uint8_t b) {
 }
 
 void add_line_number(appendBuffer *ab, uint_fast32_t line, size_t max_width) {
-  if (line > E.num_rows) {
+  if (E.num_rows == 0 || line > E.num_rows) {
     // File content is smaller than the height of the screen.
     return;
   }
@@ -852,8 +664,14 @@ void add_line_number(appendBuffer *ab, uint_fast32_t line, size_t max_width) {
 }
 
 void drawRows(appendBuffer *ab) {
-  size_t row_num_width = (size_t)floor(log10(E.num_rows + 1));
-  E.left_margin = row_num_width + 1;
+  size_t row_num_width = 0;
+
+  if (E.num_rows != 0) {
+    row_num_width = (size_t)ceil(log10(E.num_rows));
+    E.left_margin = row_num_width + 1; // Number of digits plus a space.
+  } else {
+    E.left_margin = 0;
+  }
 
   for (uint_fast32_t y = 0; y < E.screen_rows; y++) {
     uint_fast32_t file_row = y + E.row_offset;
