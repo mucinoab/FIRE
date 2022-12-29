@@ -242,7 +242,7 @@ void getWindowSize() {
 /*** syntax highlighting ***/
 
 void editorUpdateSyntax(row *row) {
-  row->hl = realloc(row->hl, row->render.len);
+  row->hl = realloc(row->hl, row->render.len + 1);
   memset(row->hl, HL_NORMAL, row->render.len);
 
   // TODO Add logic that sets the highlighted areas.
