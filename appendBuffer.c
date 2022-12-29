@@ -60,7 +60,7 @@ void abAppendChar(appendBuffer *ab, char c) {
   }
 
   ab->buf[ab->len] = c;
-  ab->len = new_len;
+  ab->len++;
   ab->buf[ab->len] = '\0'; // Null terminated
 }
 

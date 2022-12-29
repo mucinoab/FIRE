@@ -33,11 +33,14 @@ enum editorKey {
   PAGE_DOWN
 };
 
+enum editorHighlight { HL_NORMAL = 0, HL_NUMBER, HL_MATCH };
+
 /*** data ***/
 
 typedef struct row {
   appendBuffer chars;
   appendBuffer render;
+  uint8_t *hl; // Highlight information. TODO use a bitset.
 } row;
 
 row new_row() {
@@ -244,6 +247,28 @@ void getWindowSize() {
   }
 }
 
+/*** syntax highlighting ***/
+
+void editorUpdateSyntax(row *row) {
+  row->hl = realloc(row->hl, row->render.len);
+  memset(row->hl, HL_NORMAL, row->render.len);
+
+  // TODO Add logic that sets the highlighted areas.
+}
+
+uint8_t editorSyntaxToColor(uint8_t hl) {
+  switch (hl) {
+  case HL_NUMBER:
+    return 31;
+
+  case HL_MATCH:
+    return 34;
+
+  default:
+    return 37;
+  }
+}
+
 /*** row operations ***/
 
 /// Translates the pointer position from actual to render.
@@ -301,6 +326,8 @@ void updateRow(row *r) {
 
   r->render.buf[idx] = '\0';
   r->render.len = idx;
+
+  editorUpdateSyntax(r);
 }
 
 void insertRowAt(char *s, size_t at) {
@@ -321,6 +348,7 @@ void insertRowAt(char *s, size_t at) {
 void editorFreeRow(row *row) {
   abFree(&row->chars);
   abFree(&row->render);
+  free(row->hl);
 }
 
 void editorDelRow(size_t at) {
@@ -485,6 +513,17 @@ void editorFindCallback(char *query, size_t key) {
   static ssize_t last_match = -1;
   static ssize_t direction = 1;
 
+  static size_t saved_hl_line = 0;
+  static char *saved_hl = NULL;
+
+  if (saved_hl) {
+    // Restore previous highlighted match.
+    memcpy(E.rows[saved_hl_line].hl, saved_hl,
+           E.rows[saved_hl_line].render.len);
+    free(saved_hl);
+    saved_hl = NULL;
+  }
+
   if (key == ENTER || key == ESC) {
     last_match = -1;
     direction = 1;
@@ -521,6 +560,13 @@ void editorFindCallback(char *query, size_t key) {
       E.cy = current;
       E.cx = editorRowRxToCx(row, match - row->render.buf);
       E.row_offset = E.num_rows;
+
+      // Highlight the match, and save the line to restore it later.
+      saved_hl_line = current;
+      saved_hl = calloc(sizeof(row->render.buf), row->render.len);
+      memcpy(saved_hl, row->hl, row->render.len);
+      memset(&row->hl[match - row->render.buf], HL_MATCH, strlen(query));
+
       break;
     }
   }
@@ -735,7 +781,7 @@ void add_line_number(appendBuffer *ab, uint_fast32_t line, size_t max_width) {
   }
 
   char back[32] = {0};
-  char buf[8] = {0};
+  char buf[16] = {0};
   char pad[8] = {0};
 
   size_t idx = 0;
@@ -750,9 +796,10 @@ void add_line_number(appendBuffer *ab, uint_fast32_t line, size_t max_width) {
     background_from_rgb(back, 60, 65, 72);
 
   abAppend(ab, back);
-  snprintf(buf, 8, "%s%lu ", pad, line);
+  snprintf(buf, 16, "%s%lu ", pad, line);
   abAppend(ab, buf);
-  abAppend(ab, background_from_rgb(back, 51, 187, 200)); // Restore, blueish
+
+  abAppend(ab, background_from_rgb(back, 194, 179, 149)); // Restore, blueish
 }
 
 void drawRows(appendBuffer *ab) {
@@ -772,13 +819,30 @@ void drawRows(appendBuffer *ab) {
       if (E.screen_cols < (uint_fast32_t)len)
         len = E.screen_cols - 1;
 
-      char place_holder = E.rows[file_row].render.buf[len + E.col_offset];
-      E.rows[file_row].render.buf[len + E.col_offset] = '\0';
+      char *c = &E.rows[file_row].render.buf[E.col_offset];
+      uint8_t *hl = &E.rows[file_row].hl[E.col_offset];
+      int8_t current_color = -1;
+      char buf[32] = {0};
 
-      abAppend(ab, &E.rows[file_row].render.buf[E.col_offset]);
+      // Append to the buffer char by char, while adding highlighting.
+      for (int_fast32_t j = 0; j < len; j++) {
+        if (hl[j] == HL_NORMAL) {
+          if (current_color != -1) {
+            abAppend(ab, background_from_rgb(buf, 194, 179, 149));
+            current_color = -1;
+          }
+        } else {
+          uint8_t color = editorSyntaxToColor(hl[j]);
 
-      // Resotre the original line
-      E.rows[file_row].render.buf[len + E.col_offset] = place_holder;
+          if (color != current_color) {
+            current_color = color;
+            abAppend(ab, background_from_rgb(buf, 255, 165, 0));
+            abAppend(ab, buf);
+          }
+        }
+
+        abAppendChar(ab, c[j]);
+      }
     }
 
     // Erases from current position to the end of the line and jumps to
@@ -845,8 +909,7 @@ void editorRefreshScreen() {
   abAppend(&ab, "\x1b[?25l"); // Hide cursor
   abAppend(&ab, "\x1b[H");    // Put cursor at the top left.
 
-  abAppend(&ab, foreground_from_rgb(back, 38, 42, 51));   // blueish
-  abAppend(&ab, background_from_rgb(back, 51, 187, 200)); // blueish
+  abAppend(&ab, foreground_from_rgb(back, 38, 42, 51)); // gray
 
   drawRows(&ab);
   drawStatusBar(&ab);
