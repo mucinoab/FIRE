@@ -300,8 +300,8 @@ void editorInsertNewline() {
     updateRow(row);
   }
 
-  E.cy++;
   E.cx = 0;
+  E.cy++;
 }
 
 void editorDelChar() {
@@ -325,6 +325,8 @@ void editorDelChar() {
     editorDelRow(E.cy);
     E.cy--;
   }
+
+  E.dirty = 1;
 }
 
 /*** editor operations ***/
@@ -774,38 +776,26 @@ void drawMessageBar(appendBuffer *ab) {
 
 void editorRefreshScreen() {
   // TODO take into account screen resize.
-  //
-  char back[32] = {0};
+  char buf[64] = {0};
   editorScroll();
 
-  appendBuffer ab = newAppendBuffer();
+  abClear(&E.screen);
 
   // https: // vt100.net/docs/vt100-ug/chapter3.html#ED
-  abAppend(&ab, "\x1b[?25l"); // Hide cursor
-  abAppend(&ab, "\x1b[H");    // Put cursor at the top left.
+  // Hide cursor and put it at the top left.
+  abAppend(&E.screen, "\x1b[?25l\x1b[H");
+  abAppend(&E.screen, foreground_from_rgb(buf, 38, 42, 51)); // gray
 
-  abAppend(&ab, foreground_from_rgb(back, 38, 42, 51)); // gray
+  drawRows(&E.screen);
+  drawStatusBar(&E.screen);
+  drawMessageBar(&E.screen);
 
-  drawRows(&ab);
-  drawStatusBar(&ab);
-  drawMessageBar(&ab);
+  // Put cursor at his position and show it as a beam or block.
+  snprintf(buf, 64, "\x1b[%lu;%luH\033[%i q\x1b[?25h", getCy() + 1,
+           getCx() + 2 + E.left_margin, E.mode == NORMAL ? 2 : 6);
+  abAppend(&E.screen, buf);
 
-  // Put cursor at his position.
-  char buf[16] = {0};
-  snprintf(buf, sizeof(buf), "\x1b[%lu;%luH", getCy() + 1,
-           getCx() + 2 + E.left_margin);
-  abAppend(&ab, buf);
-
-  if (E.mode == NORMAL) {
-    abAppend(&ab, "\033[2 q"); // Cursor as a block: █
-  } else {
-    abAppend(&ab, "\033[6 q"); // Cursor as a beam:  |
-  }
-
-  abAppend(&ab, "\x1b[?25h"); // Show cursor
-  write(STDOUT_FILENO, ab.buf, ab.len);
-
-  abFree(&ab);
+  write(STDOUT_FILENO, E.screen.buf, E.screen.len); // Write to screen.
 }
 
 void setStatusMessage(const char *fmt, ...) {

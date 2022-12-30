@@ -7,17 +7,6 @@
 #include <termios.h>
 #include <unistd.h>
 
-/*** prototypes ***/
-char *editorPrompt(char *prompt, void (*callback)(char *, size_t));
-void editorFind();
-void editorInsertNewline();
-void editorRefreshScreen();
-void editorDelChar();
-void editorInsertChar(size_t c);
-void editorSave();
-void moveCursor(uint64_t key);
-void setStatusMessage(const char *fmt, ...);
-
 /*** defines ***/
 /// It sets the upper 3 bits of the character to 0, like the Ctrl key.
 #define CTRL_KEY(k) ((k)&0x1f)
@@ -66,6 +55,9 @@ row new_row() {
 struct editorConfig {
   struct termios orig_termios;
 
+  // Current screen buffer.
+  appendBuffer screen;
+
   // Size of the terminal
   uint_fast32_t screen_cols;
   uint_fast32_t screen_rows;
@@ -102,3 +94,19 @@ struct editorConfig E = {0};
 
 uint_fast32_t getCy() { return (E.cy - E.row_offset); }
 uint_fast32_t getCx() { return (E.rx - E.col_offset); }
+
+/*** prototypes ***/
+char *editorPrompt(char *prompt, void (*callback)(char *, size_t));
+void editorDelChar();
+void editorFind();
+void editorInsertChar(size_t c);
+void editorInsertNewline();
+void editorRefreshScreen();
+void editorSave();
+void moveCursor(uint64_t key);
+void rowDelChar(row *row, size_t at);
+void rowInsertChar(row *row, size_t at, size_t c);
+void setStatusMessage(const char *fmt, ...);
+void updateRow(row *r);
+void editorRowAppendString(row *src, row *dst);
+void editorDelRow(size_t at);
