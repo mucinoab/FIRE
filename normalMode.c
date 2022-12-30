@@ -1,6 +1,7 @@
 #pragma once
 
 #include "base.c"
+#include <string.h>
 
 void handleDoubleNormalKey(uint64_t c, uint64_t last_command) {
   switch (c) {
@@ -10,11 +11,20 @@ void handleDoubleNormalKey(uint64_t c, uint64_t last_command) {
     break;
 
   case 'd':
-    if (last_command == 'd')
-      // TODO delete row
-      break;
+    if (last_command == 'd') {
+      if (E.cx >= E.rows[E.cy + 1].render.len)
+        E.cx = E.rows[E.cy + 1].chars.len;
+      abClear(&E.rows[E.cy].chars);
+      editorDelRow(E.cy);
+    }
+    break;
 
   default:
+    if (last_command == 'r' && c != ESC) {
+      // Replace one char with just typed char.
+      E.rows[E.cy].chars.buf[E.cx] = c;
+      updateRow(&E.rows[E.cy]);
+    }
     break;
   }
 }
@@ -92,9 +102,28 @@ void handleNormalKey(uint64_t c) {
     E.mode = INSERT;
     break;
 
+  case 'x': // Delete the char under the cursor.
+    rowDelChar(&E.rows[E.cy], E.cx);
+    break;
+
   case 'b':
-  case 'w':
-    // TODO
+    // TODO Implement word traversal backwards.
+    break;
+  case 'w': {
+    // TODO Implement word traversal right.
+    char *line_from_cursor = &E.rows[E.cy].chars.buf[E.cx];
+    char *first_space = strchr(line_from_cursor, ' ');
+    // You should move X to the first non-white-space char.
+    if (first_space) {
+      E.cx += (first_space - line_from_cursor) + 1;
+    } else {
+      E.cx = 0;
+      moveCursor(ARROW_DOWN);
+    }
+  } break;
+
+  case 'u':
+    // TODO implement undo.
     break;
 
   case 'o': { // Insert new line below the line of the cursor.
@@ -106,7 +135,6 @@ void handleNormalKey(uint64_t c) {
   default:
     handleDoubleNormalKey(c, last_command);
     last_command = c;
-    // No O
     break;
   }
 }
